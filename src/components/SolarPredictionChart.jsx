@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -24,6 +24,64 @@ ChartJS.register(
 )
 
 const SolarPredictionChart = ({ data, actualData = [] }) => {
+  const [chartKey, setChartKey] = useState(0)
+  
+  // Force chart re-render when data changes
+  useEffect(() => {
+    setChartKey(prev => prev + 1)
+  }, [data, actualData])
+
+  // Memoize chart data to prevent unnecessary re-calculations
+  const chartData = useMemo(() => {
+    if (!data || data.length === 0) {
+      return {
+        labels: [],
+        datasets: []
+      }
+    }
+
+    const datasets = [
+      {
+        label: 'Predicted Power',
+        data: data.map(item => item.predictedPower || 0),
+        borderColor: '#fbbf24',
+        backgroundColor: 'rgba(251, 191, 36, 0.1)',
+        borderWidth: 3,
+        fill: true,
+        pointBackgroundColor: '#fbbf24',
+        pointBorderColor: '#ffffff',
+        pointBorderWidth: 2,
+        pointHoverBackgroundColor: '#ffffff',
+        pointHoverBorderColor: '#fbbf24',
+        pointHoverBorderWidth: 3,
+        tension: 0.4,
+      }
+    ]
+
+    // Add actual data if available
+    if (actualData && actualData.length > 0) {
+      datasets.push({
+        label: 'Actual Power',
+        data: actualData.map(item => item.actualPower || 0),
+        borderColor: '#10b981',
+        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        borderWidth: 2,
+        fill: false,
+        pointBackgroundColor: '#10b981',
+        pointBorderColor: '#ffffff',
+        pointBorderWidth: 2,
+        pointHoverBackgroundColor: '#ffffff',
+        pointHoverBorderColor: '#10b981',
+        pointHoverBorderWidth: 3,
+        tension: 0.4,
+      })
+    }
+
+    return {
+      labels: data.map(item => item.time),
+      datasets: datasets,
+    }
+  }, [data, actualData])
   const options = {
     responsive: true,
     maintainAspectRatio: false,
@@ -39,7 +97,7 @@ const SolarPredictionChart = ({ data, actualData = [] }) => {
       },
       title: {
         display: true,
-        text: 'Solar Power Prediction vs Actual',
+        text: 'Real-time Solar Power Forecast',
         color: 'white',
         font: {
           size: 16,
@@ -112,56 +170,22 @@ const SolarPredictionChart = ({ data, actualData = [] }) => {
       },
     },
     animation: {
-      duration: 750,
+      duration: 300,
       easing: 'easeInOutQuart',
     },
-  }
-
-  const datasets = [
-    {
-      label: 'Predicted Power',
-      data: data.map(item => item.predictedPower),
-      borderColor: '#fbbf24',
-      backgroundColor: 'rgba(251, 191, 36, 0.1)',
-      borderWidth: 3,
-      fill: true,
-      pointBackgroundColor: '#fbbf24',
-      pointBorderColor: '#ffffff',
-      pointBorderWidth: 2,
-      pointHoverBackgroundColor: '#ffffff',
-      pointHoverBorderColor: '#fbbf24',
-      pointHoverBorderWidth: 3,
-      tension: 0.4,
-    }
-  ]
-
-  // Add actual data if available
-  if (actualData.length > 0) {
-    datasets.push({
-      label: 'Actual Power',
-      data: actualData.map(item => item.actualPower),
-      borderColor: '#10b981',
-      backgroundColor: 'rgba(16, 185, 129, 0.1)',
-      borderWidth: 2,
-      fill: false,
-      pointBackgroundColor: '#10b981',
-      pointBorderColor: '#ffffff',
-      pointBorderWidth: 2,
-      pointHoverBackgroundColor: '#ffffff',
-      pointHoverBorderColor: '#10b981',
-      pointHoverBorderWidth: 3,
-      tension: 0.4,
-    })
-  }
-
-  const chartData = {
-    labels: data.map(item => item.time),
-    datasets: datasets,
+    // Enable real-time updates
+    responsive: true,
+    maintainAspectRatio: false,
   }
 
   return (
     <div style={{ height: '100%', width: '100%' }}>
-      <Line options={options} data={chartData} />
+      <Line 
+        key={chartKey} 
+        options={options} 
+        data={chartData} 
+        redraw={true}
+      />
     </div>
   )
 }

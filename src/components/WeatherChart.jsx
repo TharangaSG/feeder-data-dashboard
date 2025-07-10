@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -24,6 +24,67 @@ ChartJS.register(
 )
 
 const WeatherChart = ({ data }) => {
+  const [chartKey, setChartKey] = useState(0)
+  
+  // Force chart re-render when data changes
+  useEffect(() => {
+    setChartKey(prev => prev + 1)
+  }, [data])
+
+  // Memoize chart data to prevent unnecessary re-calculations
+  const chartData = useMemo(() => {
+    if (!data || data.length === 0) {
+      return {
+        labels: [],
+        datasets: []
+      }
+    }
+
+    return {
+      labels: data.map(item => item.time),
+      datasets: [
+        {
+          label: 'Temperature',
+          data: data.map(item => item.temperature),
+          borderColor: '#ef4444',
+          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+          borderWidth: 2,
+          fill: false,
+          yAxisID: 'y',
+          pointBackgroundColor: '#ef4444',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 1,
+          tension: 0.4,
+        },
+        {
+          label: 'Humidity',
+          data: data.map(item => item.humidity),
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59, 130, 246, 0.1)',
+          borderWidth: 2,
+          fill: false,
+          yAxisID: 'y1',
+          pointBackgroundColor: '#3b82f6',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 1,
+          tension: 0.4,
+        },
+        {
+          label: 'Pressure',
+          data: data.map(item => item.pressure),
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16, 185, 129, 0.1)',
+          borderWidth: 2,
+          fill: false,
+          yAxisID: 'y1',
+          pointBackgroundColor: '#10b981',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 1,
+          tension: 0.4,
+        },
+      ],
+    }
+  }, [data])
   const options = {
     responsive: true,
     maintainAspectRatio: false,
@@ -134,59 +195,22 @@ const WeatherChart = ({ data }) => {
       },
     },
     animation: {
-      duration: 750,
+      duration: 300,
       easing: 'easeInOutQuart',
     },
-  }
-
-  const chartData = {
-    labels: data.map(item => item.time),
-    datasets: [
-      {
-        label: 'Temperature',
-        data: data.map(item => item.temperature),
-        borderColor: '#ef4444',
-        backgroundColor: 'rgba(239, 68, 68, 0.1)',
-        borderWidth: 2,
-        fill: false,
-        yAxisID: 'y',
-        pointBackgroundColor: '#ef4444',
-        pointBorderColor: '#ffffff',
-        pointBorderWidth: 1,
-        tension: 0.4,
-      },
-      {
-        label: 'Humidity',
-        data: data.map(item => item.humidity),
-        borderColor: '#3b82f6',
-        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-        borderWidth: 2,
-        fill: false,
-        yAxisID: 'y1',
-        pointBackgroundColor: '#3b82f6',
-        pointBorderColor: '#ffffff',
-        pointBorderWidth: 1,
-        tension: 0.4,
-      },
-      {
-        label: 'Pressure',
-        data: data.map(item => item.pressure),
-        borderColor: '#10b981',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-        borderWidth: 2,
-        fill: false,
-        yAxisID: 'y1',
-        pointBackgroundColor: '#10b981',
-        pointBorderColor: '#ffffff',
-        pointBorderWidth: 1,
-        tension: 0.4,
-      },
-    ],
+    // Enable real-time updates
+    responsive: true,
+    maintainAspectRatio: false,
   }
 
   return (
     <div style={{ height: '100%', width: '100%' }}>
-      <Line options={options} data={chartData} />
+      <Line 
+        key={chartKey} 
+        options={options} 
+        data={chartData} 
+        redraw={true}
+      />
     </div>
   )
 }

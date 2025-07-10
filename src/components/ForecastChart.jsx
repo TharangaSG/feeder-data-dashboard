@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -24,6 +24,58 @@ ChartJS.register(
 )
 
 const ForecastChart = ({ data, title = "24-Hour Solar Power Forecast" }) => {
+  const [chartKey, setChartKey] = useState(0)
+  
+  // Force chart re-render when data changes
+  useEffect(() => {
+    setChartKey(prev => prev + 1)
+  }, [data])
+
+  // Memoize chart data to prevent unnecessary re-calculations
+  const chartData = useMemo(() => {
+    if (!data || data.length === 0) {
+      return {
+        labels: [],
+        datasets: []
+      }
+    }
+
+    return {
+      labels: data.map(item => {
+        // Handle both timestamp and time formats
+        const timestamp = item.timestamp || item.time
+        if (timestamp) {
+          const date = new Date(timestamp)
+          return date.toLocaleTimeString('en-US', { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            hour12: false
+          })
+        }
+        return item.time || 'Unknown'
+      }),
+      datasets: [
+        {
+          label: 'Predicted Solar Power',
+          data: data.map(item => {
+            // Handle both predictedPower and predicted_power_kw formats
+            return item.predictedPower || item.predicted_power_kw || 0
+          }),
+          borderColor: '#fbbf24',
+          backgroundColor: 'rgba(251, 191, 36, 0.1)',
+          borderWidth: 3,
+          fill: true,
+          pointBackgroundColor: '#fbbf24',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 2,
+          pointHoverBackgroundColor: '#ffffff',
+          pointHoverBorderColor: '#fbbf24',
+          pointHoverBorderWidth: 3,
+          tension: 0.4,
+        },
+      ],
+    }
+  }, [data])
   const options = {
     responsive: true,
     maintainAspectRatio: false,
@@ -129,42 +181,22 @@ const ForecastChart = ({ data, title = "24-Hour Solar Power Forecast" }) => {
       },
     },
     animation: {
-      duration: 750,
+      duration: 300,
       easing: 'easeInOutQuart',
     },
-  }
-
-  const chartData = {
-    labels: data.map(item => {
-      const date = new Date(item.timestamp)
-      return date.toLocaleTimeString('en-US', { 
-        hour: '2-digit', 
-        minute: '2-digit',
-        hour12: false
-      })
-    }),
-    datasets: [
-      {
-        label: 'Predicted Solar Power',
-        data: data.map(item => item.predicted_power_kw),
-        borderColor: '#fbbf24',
-        backgroundColor: 'rgba(251, 191, 36, 0.1)',
-        borderWidth: 3,
-        fill: true,
-        pointBackgroundColor: '#fbbf24',
-        pointBorderColor: '#ffffff',
-        pointBorderWidth: 2,
-        pointHoverBackgroundColor: '#ffffff',
-        pointHoverBorderColor: '#fbbf24',
-        pointHoverBorderWidth: 3,
-        tension: 0.4,
-      },
-    ],
+    // Enable real-time updates
+    responsive: true,
+    maintainAspectRatio: false,
   }
 
   return (
     <div style={{ height: '100%', width: '100%' }}>
-      <Line options={options} data={chartData} />
+      <Line 
+        key={chartKey} 
+        options={options} 
+        data={chartData} 
+        redraw={true}
+      />
     </div>
   )
 }

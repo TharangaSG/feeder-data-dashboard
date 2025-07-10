@@ -1,7 +1,7 @@
 import axios from 'axios'
 
-// Configure Weather API URL
-const WEATHER_API_URL = 'http://localhost:5000'
+// Configure Weather API URL (Weather Data Collection API)
+const WEATHER_API_URL = 'http://localhost:5003'
 
 // Create axios instance for Weather API
 const weatherApiInstance = axios.create({
@@ -39,63 +39,91 @@ weatherApiInstance.interceptors.response.use(
 
 // Weather API functions
 export const weatherApi = {
-  // Fetch weather data from Weather API (port 5000)
-  getWeatherData: async (limit = 20, dataType = 'forecast') => {
+  // Fetch weather data from Weather API (port 5003)
+  getWeatherData: async (limit = 20, dataType = 'forecast', latitude = null, longitude = null) => {
     try {
-      // Try to get real data from Weather API first
-      console.log('Attempting to fetch real weather data...')
-      const response = await weatherApiInstance.get('/weather/data', {
-        params: { limit }
-      })
+      console.log('Fetching real weather data from /weather/data...')
+      const params = { limit }
+      
+      if (latitude !== null) params.latitude = latitude
+      if (longitude !== null) params.longitude = longitude
+      if (dataType) params.data_type = dataType
+      
+      const response = await weatherApiInstance.get('/weather/data', { params })
       console.log('Weather API: Real data received successfully')
       return response.data
-    } catch (err) {
-      try {
-        // Try alternative endpoint
-        console.log('Trying alternative weather endpoint...')
-        const response = await weatherApiInstance.get('/weather-data', {
-          params: { limit, data_type: dataType }
-        })
-        console.log('Weather API (alt): Real data received successfully')
-        return response.data
-      } catch (err2) {
-        // Fall back to mock data if both endpoints fail
-        console.log('Weather API unavailable, using mock data as fallback')
-        return weatherApi.generateMockWeatherData(limit)
-      }
+    } catch (error) {
+      console.error('Weather API error:', error)
+      throw error
     }
   },
 
-  // Generate mock weather data when API is not available
-  generateMockWeatherData: (limit = 20) => {
-    const mockData = []
-    const now = new Date()
-    
-    for (let i = 0; i < limit; i++) {
-      const timestamp = new Date(now.getTime() - (limit - i - 1) * 5 * 60 * 1000) // 5 minutes intervals
-      const hour = timestamp.getHours()
-      
-      // Generate realistic weather patterns
-      const baseTemp = 25 + Math.sin((hour - 6) * Math.PI / 12) * 8 // Temperature curve
-      const temperature = baseTemp + (Math.random() - 0.5) * 4
-      
-      mockData.push({
-        id: i + 1,
-        timestamp: timestamp.toISOString(),
-        temperature: Math.round(temperature * 10) / 10,
-        relative_humidity_2m: 60 + (Math.random() - 0.5) * 30,
-        wind_speed_10m: 3 + Math.random() * 5,
-        pressure_msl: 1013 + (Math.random() - 0.5) * 20,
-        cloud_cover: Math.random() * 100,
-        direct_normal_irradiance: hour >= 6 && hour <= 18 ? 
-          Math.max(0, 800 * Math.sin((hour - 6) * Math.PI / 12) + (Math.random() - 0.5) * 200) : 0,
-        latitude: 6.86666,
-        longitude: 80.01667,
-        data_type: 'forecast'
+  // Get latest weather data for a specific location
+  getLatestWeatherData: async (latitude, longitude, hours = 24) => {
+    try {
+      console.log('Fetching latest weather data...')
+      const response = await weatherApiInstance.get('/weather/latest', {
+        params: { 
+          latitude, 
+          longitude, 
+          hours,
+          _t: Date.now() // Cache busting parameter
+        }
       })
+      console.log('Latest weather data received successfully')
+      return response.data
+    } catch (error) {
+      console.error('Latest weather API error:', error)
+      throw error
     }
-    
-    return mockData
+  },
+
+  // Get raw forecast data without storing in database
+  getRawForecastData: async (latitude, longitude, hours = 5) => {
+    try {
+      console.log('Fetching raw forecast data...')
+      const response = await weatherApiInstance.get('/weather/forecast/raw', {
+        params: { latitude, longitude, hours }
+      })
+      console.log('Raw forecast data received successfully')
+      return response.data
+    } catch (error) {
+      console.error('Raw forecast API error:', error)
+      throw error
+    }
+  },
+
+  // Collect weather data for a location (sync)
+  collectWeatherDataSync: async (latitude, longitude) => {
+    try {
+      console.log('Collecting weather data synchronously...')
+      const response = await weatherApiInstance.post('/weather/collect/sync', {
+        latitude,
+        longitude
+      })
+      console.log('Weather data collection completed')
+      return response.data
+    } catch (error) {
+      console.error('Weather collection error:', error)
+      throw error
+    }
+  },
+
+  // Get humidity data for charting
+  getHumidityData: async (latitude, longitude, startDate = null, endDate = null) => {
+    try {
+      console.log('Fetching humidity data...')
+      const params = { latitude, longitude }
+      if (startDate) params.start_date = startDate
+      if (endDate) params.end_date = endDate
+      
+      const response = await weatherApiInstance.get('/api/humidity', { params })
+      console.log('Humidity data received successfully')
+      return response.data
+    } catch (error) {
+      console.error('Humidity API error:', error)
+      throw error
+    }
   },
 
   // Test weather API connection
