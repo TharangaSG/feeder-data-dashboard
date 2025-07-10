@@ -41,9 +41,29 @@ weatherApiInstance.interceptors.response.use(
 export const weatherApi = {
   // Fetch weather data from Weather API (port 5000)
   getWeatherData: async (limit = 20, dataType = 'forecast') => {
-    // Use mock data to avoid CORS issues
-    console.log('Using mock weather data to avoid CORS issues')
-    return weatherApi.generateMockWeatherData(limit)
+    try {
+      // Try to get real data from Weather API first
+      console.log('Attempting to fetch real weather data...')
+      const response = await weatherApiInstance.get('/weather/data', {
+        params: { limit }
+      })
+      console.log('Weather API: Real data received successfully')
+      return response.data
+    } catch (err) {
+      try {
+        // Try alternative endpoint
+        console.log('Trying alternative weather endpoint...')
+        const response = await weatherApiInstance.get('/weather-data', {
+          params: { limit, data_type: dataType }
+        })
+        console.log('Weather API (alt): Real data received successfully')
+        return response.data
+      } catch (err2) {
+        // Fall back to mock data if both endpoints fail
+        console.log('Weather API unavailable, using mock data as fallback')
+        return weatherApi.generateMockWeatherData(limit)
+      }
+    }
   },
 
   // Generate mock weather data when API is not available

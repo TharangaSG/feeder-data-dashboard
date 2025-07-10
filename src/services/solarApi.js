@@ -41,64 +41,135 @@ solarApiInstance.interceptors.response.use(
 export const solarApi = {
   // Get solar predictions from database
   getSolarPredictions: async (limit = 24) => {
-    // Use mock data to avoid CORS issues
-    console.log('Using mock solar predictions to avoid CORS issues')
-    return solarApi.generateMockSolarPredictions(limit)
+    try {
+      // Try to get real data from Solar API first
+      console.log('Attempting to fetch real solar predictions...')
+      const response = await solarApiInstance.get('/solar-predictions', {
+        params: { limit }
+      })
+      console.log('Solar API: Real predictions received successfully')
+      return response.data
+    } catch (error) {
+      // Fall back to mock data if API fails
+      console.log('Solar API unavailable, using mock predictions as fallback')
+      return solarApi.generateMockSolarPredictions(limit)
+    }
   },
 
   // Get forecast solar predictions (24 hours ahead)
   getForecastSolarPredictions: async (limit = 24, locationFilter = null) => {
-    // Use mock data to avoid CORS issues
-    console.log('Using mock forecast predictions to avoid CORS issues')
-    return solarApi.generateMockForecastPredictions(limit)
+    try {
+      // Try to get real forecast data from Solar API first
+      console.log('Attempting to fetch real forecast predictions...')
+      const params = { limit }
+      if (locationFilter) {
+        params.location_filter = locationFilter
+      }
+      const response = await solarApiInstance.get('/solar-predictions/forecast', { params })
+      console.log('Solar Forecast API: Real data received successfully')
+      return response.data
+    } catch (error) {
+      // Fall back to mock data if API fails
+      console.log('Solar Forecast API unavailable, using mock data as fallback')
+      return solarApi.generateMockForecastPredictions(limit)
+    }
   },
 
   // Get predictions summary
   getPredictionsSummary: async (locationFilter = null) => {
-    // Return mock summary to avoid CORS issues
-    return {
-      total_predictions: 150,
-      avg_power_today: 3.2,
-      peak_power_today: 5.8,
-      total_energy_today: 28.5,
-      efficiency: 85.2,
-      last_updated: new Date().toISOString()
+    try {
+      // Try to get real summary from Solar API first
+      console.log('Attempting to fetch real predictions summary...')
+      const params = {}
+      if (locationFilter) {
+        params.location_filter = locationFilter
+      }
+      const response = await solarApiInstance.get('/solar-predictions/summary', { params })
+      console.log('Solar Summary API: Real data received successfully')
+      return response.data
+    } catch (error) {
+      // Fall back to mock summary if API fails
+      console.log('Solar Summary API unavailable, using mock data as fallback')
+      return {
+        total_predictions: 150,
+        avg_power_today: 3.2,
+        peak_power_today: 5.8,
+        total_energy_today: 28.5,
+        efficiency: 85.2,
+        last_updated: new Date().toISOString()
+      }
     }
   },
 
   // Trigger auto forecast prediction pipeline
   triggerForecastPipeline: async (locationFilter = null, hoursAhead = 24) => {
-    // Return mock response to avoid CORS issues
-    console.log('Mock: Forecast pipeline triggered')
-    return { status: 'success', message: 'Pipeline triggered (mock)' }
+    try {
+      console.log('Attempting to trigger forecast pipeline...')
+      const response = await solarApiInstance.post('/predict/auto-forecast-pipeline', {
+        location_filter: locationFilter,
+        hours_ahead: hoursAhead
+      })
+      console.log('Forecast pipeline triggered successfully')
+      return response.data
+    } catch (error) {
+      console.log('Forecast pipeline API unavailable, using mock response')
+      return { status: 'success', message: 'Pipeline triggered (mock)' }
+    }
   },
 
   // Get database status
   getDatabaseStatus: async () => {
-    // Return mock status to avoid CORS issues
-    return {
-      status: 'connected',
-      weather_records: 1250,
-      prediction_records: 890,
-      last_update: new Date().toISOString(),
-      database_size: '45.2 MB'
+    try {
+      // Try to get real database status from Solar API first
+      console.log('Attempting to fetch real database status...')
+      const response = await solarApiInstance.get('/database/status')
+      console.log('Database Status API: Real data received successfully')
+      return response.data
+    } catch (error) {
+      // Fall back to mock status if API fails
+      console.log('Database Status API unavailable, using mock data as fallback')
+      return {
+        status: 'connected',
+        weather_records: 1250,
+        prediction_records: 890,
+        last_update: new Date().toISOString(),
+        database_size: '45.2 MB'
+      }
     }
   },
 
   // Solar power prediction endpoint (single prediction)
   predictSolarPower: async (inputData) => {
-    // Return mock prediction to avoid CORS issues
-    return {
-      predicted_power_kw: 3.5 + Math.random() * 2,
-      confidence: 0.85,
-      timestamp: new Date().toISOString()
+    try {
+      console.log('Attempting to predict solar power...')
+      const response = await solarApiInstance.post('/predict/single', inputData)
+      console.log('Solar power prediction successful')
+      return response.data
+    } catch (error) {
+      console.log('Solar power prediction API unavailable, using mock response')
+      return {
+        predicted_power_kw: 3.5 + Math.random() * 2,
+        confidence: 0.85,
+        timestamp: new Date().toISOString()
+      }
     }
   },
 
   // Predict from database weather data
   predictFromDatabase: async (limit = 10, dataType = 'forecast', locationFilter = null) => {
-    // Return mock predictions to avoid CORS issues
-    return solarApi.generateMockSolarPredictions(limit)
+    try {
+      console.log('Attempting to predict from database...')
+      const response = await solarApiInstance.post('/predict/from-database', {
+        limit,
+        data_type: dataType,
+        location_filter: locationFilter
+      })
+      console.log('Database prediction successful')
+      return response.data
+    } catch (error) {
+      console.log('Database prediction API unavailable, using mock data')
+      return solarApi.generateMockSolarPredictions(limit)
+    }
   },
 
   // Generate mock solar predictions when API is not available
