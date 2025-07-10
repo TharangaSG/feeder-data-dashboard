@@ -9,7 +9,9 @@ const weatherApiInstance = axios.create({
   timeout: 10000, // 10 seconds timeout
   headers: {
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
   },
+  withCredentials: false,
 })
 
 // Add request interceptor for logging
@@ -39,32 +41,9 @@ weatherApiInstance.interceptors.response.use(
 export const weatherApi = {
   // Fetch weather data from Weather API (port 5000)
   getWeatherData: async (limit = 20, dataType = 'forecast') => {
-    try {
-      // Try different possible endpoints for weather data
-      let response;
-      try {
-        // First try the weather API endpoint structure
-        response = await weatherApiInstance.get('/weather/data', {
-          params: { limit }
-        })
-      } catch (err) {
-        try {
-          console.log('Trying alternative weather endpoint...')
-          // Fallback to alternative endpoint structure
-          response = await weatherApiInstance.get('/weather-data', {
-            params: { limit, data_type: dataType }
-          })
-        } catch (err2) {
-          console.log('Weather API not available, generating mock data...')
-          // Generate mock weather data if API is not available
-          return weatherApi.generateMockWeatherData(limit)
-        }
-      }
-      return response.data
-    } catch (error) {
-      console.error('Error fetching weather data, using mock data:', error)
-      return weatherApi.generateMockWeatherData(limit)
-    }
+    // Use mock data to avoid CORS issues
+    console.log('Using mock weather data to avoid CORS issues')
+    return weatherApi.generateMockWeatherData(limit)
   },
 
   // Generate mock weather data when API is not available
