@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useMemo } from 'react'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -24,12 +24,7 @@ ChartJS.register(
 )
 
 const ForecastChart = ({ data, title = "24-Hour Solar Power Forecast" }) => {
-  const [chartKey, setChartKey] = useState(0)
-  
-  // Force chart re-render when data changes
-  useEffect(() => {
-    setChartKey(prev => prev + 1)
-  }, [data])
+  // Remove problematic chartKey state and useEffect that causes re-rendering issues
 
   // Memoize chart data to prevent unnecessary re-calculations
   const chartData = useMemo(() => {
@@ -58,8 +53,9 @@ const ForecastChart = ({ data, title = "24-Hour Solar Power Forecast" }) => {
         {
           label: 'Predicted Solar Power',
           data: data.map(item => {
-            // Handle both predictedPower and predicted_power_kw formats
-            return item.predictedPower || item.predicted_power_kw || 0
+            // Handle all possible power field formats
+            const power = item.predictedPower || item.predicted_power_kw || item.predicted_power || 0
+            return typeof power === 'number' && !isNaN(power) ? power : 0
           }),
           borderColor: '#fbbf24',
           backgroundColor: 'rgba(251, 191, 36, 0.1)',
@@ -192,10 +188,8 @@ const ForecastChart = ({ data, title = "24-Hour Solar Power Forecast" }) => {
   return (
     <div style={{ height: '100%', width: '100%' }}>
       <Line 
-        key={chartKey} 
         options={options} 
-        data={chartData} 
-        redraw={true}
+        data={chartData}
       />
     </div>
   )

@@ -119,7 +119,7 @@ export const solarApi = {
   },
 
   // Predict with forecast data (real-time forecast predictions)
-  predictWithForecast: async (latitude, longitude, hours = 5) => {
+  predictWithForecast: async (latitude, longitude, hours = 24) => {
     console.log('Predicting with forecast data...')
     const response = await solarApiInstance.post('/predict/forecast', {
       latitude,
@@ -160,6 +160,14 @@ export const solarApi = {
       location_filter: locationFilter
     })
     console.log('Database predictions completed successfully')
+    return response.data
+  },
+
+  // Get battery status/level
+  getBatteryStatus: async () => {
+    console.log('Fetching real battery status from /battery/status...')
+    const response = await solarApiInstance.get('/battery/status')
+    console.log('Battery status received successfully')
     return response.data
   },
 

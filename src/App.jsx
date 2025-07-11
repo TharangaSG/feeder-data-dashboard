@@ -28,21 +28,57 @@ function App() {
   const [dbStatus, setDbStatus] = useState(null)
   const [summary, setSummary] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(new Date())
+  const [currentTimeWindow, setCurrentTimeWindow] = useState(null)
   const [apiStatus, setApiStatus] = useState({
     weather: 'unknown',
     solar: 'unknown'
   })
 
-  // Default location (you can make this configurable)
+  // Default location
   const defaultLocation = {
     latitude: 6.86666,
     longitude: 80.01667
   }
 
+  // Calculate rolling 24-hour window boundaries
+  const getRollingTimeWindow = () => {
+    const now = new Date()
+    const currentHour = now.getHours()
+    
+    // Start time: current hour today (for forecast - next 24 hours)
+    const forecastStartTime = new Date(now)
+    forecastStartTime.setHours(currentHour, 0, 0, 0)
+    
+    // End time: same hour tomorrow
+    const forecastEndTime = new Date(forecastStartTime)
+    forecastEndTime.setDate(forecastEndTime.getDate() + 1)
+    
+    // Historical start time: 24 hours ago from current hour
+    const historicalStartTime = new Date(forecastStartTime)
+    historicalStartTime.setDate(historicalStartTime.getDate() - 1)
+    
+    return { 
+      historicalStartTime, 
+      forecastStartTime, 
+      forecastEndTime, 
+      currentHour,
+      windowLabel: `${currentHour}:00 - ${currentHour}:00 (+24h)`
+    }
+  }
+
+  // Check if we need to update the rolling window (every hour)
+  const shouldUpdateRollingWindow = () => {
+    const now = new Date()
+    const lastUpdateHour = lastUpdated.getHours()
+    const currentHour = now.getHours()
+    
+    // Update if hour has changed or if it's been more than an hour
+    return currentHour !== lastUpdateHour || (now - lastUpdated) > 3600000
+  }
+
   // Fetch real-time weather data
   const fetchWeatherData = async () => {
     try {
-      // First try to get latest weather data for the location
       const data = await weatherApi.getLatestWeatherData(
         defaultLocation.latitude, 
         defaultLocation.longitude, 
@@ -50,11 +86,11 @@ function App() {
       )
       console.log('Fetched latest weather data:', data)
       
-      // Transform the data for the chart
       const transformedData = data.map(item => ({
         time: new Date(item.timestamp).toLocaleTimeString('en-US', { 
           hour: '2-digit', 
-          minute: '2-digit' 
+          minute: '2-digit',
+          hour12: false
         }),
         temperature: item.temperature || 0,
         humidity: item.relative_humidity_2m || 0,
@@ -64,14 +100,9 @@ function App() {
         irradiance: item.direct_normal_irradiance || 0
       }))
       
-      // Log data details for debugging
       console.log(`Weather data updated: ${transformedData.length} records`)
-      console.log('Latest weather timestamp:', transformedData.length > 0 ? transformedData[transformedData.length - 1].time : 'No data')
-      console.log('Weather data sample:', transformedData.slice(0, 2))
-      
       setWeatherData(transformedData)
       
-      // Set current values from the latest data point
       if (transformedData.length > 0) {
         const latest = transformedData[transformedData.length - 1]
         setCurrentTemperature(latest.temperature)
@@ -79,71 +110,47 @@ function App() {
         setCurrentPressure(latest.pressure)
       }
       
-      // Update API status
       setApiStatus(prev => ({ ...prev, weather: 'connected' }))
       
-      // Clear any previous errors since we got data
-      if (error && error.includes('weather data')) {
-        setError(null)
-      }
-      
     } catch (err) {
-      console.error('Error fetching latest weather data, trying general endpoint:', err)
-      
-      // Fallback to general weather data endpoint
-      try {
-        const data = await weatherApi.getWeatherData(20, 'forecast', 
-          defaultLocation.latitude, defaultLocation.longitude)
-        console.log('Fetched fallback weather data:', data)
-        
-        const transformedData = data.map(item => ({
-          time: new Date(item.timestamp).toLocaleTimeString('en-US', { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-          }),
-          temperature: item.temperature || 0,
-          humidity: item.relative_humidity_2m || 0,
-          pressure: item.pressure_msl || 0,
-          windSpeed: item.wind_speed_10m || 0,
-          cloudCover: item.cloud_cover || 0,
-          irradiance: item.direct_normal_irradiance || 0
-        }))
-        
-        setWeatherData(transformedData)
-        setApiStatus(prev => ({ ...prev, weather: 'connected' }))
-        
-      } catch (fallbackErr) {
-        console.error('Error fetching weather data:', fallbackErr)
-        setApiStatus(prev => ({ ...prev, weather: 'error' }))
-        setError('Unable to fetch weather data from API')
-      }
+      console.error('Error fetching weather data:', err)
+      setApiStatus(prev => ({ ...prev, weather: 'error' }))
     }
   }
 
-  // Fetch real-time solar predictions (24 hours of historical/current data)
+  // Fetch real-time solar predictions (rolling 24-hour historical window)
   const fetchRealtimePredictions = async () => {
     try {
-      console.log('Fetching real-time solar predictions...')
+      const { historicalStartTime, forecastStartTime, currentHour, windowLabel } = getRollingTimeWindow()
+      console.log(`Fetching real-time solar predictions for rolling window: ${windowLabel}`)
+      console.log(`Historical window: ${historicalStartTime.toLocaleString()} to ${forecastStartTime.toLocaleString()}`)
       
-      // Try multiple approaches to get real-time predictions
       let data = []
       
-      // First try: Get recent predictions from database
+      // Try to get predictions from database
       try {
-        data = await solarApi.getSolarPredictions(24)
+        data = await solarApi.getSolarPredictions(48) // Get more data to filter
         console.log('Fetched realtime predictions from database:', data?.length || 0, 'records')
+        
+        // Filter data to rolling 24-hour historical window
+        if (data && data.length > 0) {
+          data = data.filter(item => {
+            const itemTime = new Date(item.timestamp)
+            return itemTime >= historicalStartTime && itemTime < forecastStartTime
+          })
+          console.log(`Filtered to historical rolling window: ${data.length} records`)
+        }
       } catch (err) {
-        console.warn('Database predictions failed, trying alternative methods:', err)
+        console.warn('Database predictions failed:', err)
       }
       
-      // If no data, try to generate predictions from current weather
+      // Generate predictions if no data
       if (!data || data.length === 0) {
         try {
           console.log('No existing predictions, generating from database weather...')
           const predictionResult = await solarApi.predictFromDatabase(24, 'current', defaultLocation)
           console.log('Generated predictions from database:', predictionResult)
           
-          // Fetch the newly generated predictions
           data = await solarApi.getSolarPredictions(24)
           console.log('Fetched newly generated predictions:', data?.length || 0, 'records')
         } catch (err) {
@@ -151,62 +158,43 @@ function App() {
         }
       }
       
-      // If still no data, create mock data for demonstration
-      if (!data || data.length === 0) {
-        console.log('Creating mock real-time predictions for demonstration...')
-        const now = new Date()
-        data = Array.from({ length: 24 }, (_, i) => {
-          const timestamp = new Date(now.getTime() - (23 - i) * 60 * 60 * 1000) // Last 24 hours
-          const hour = timestamp.getHours()
-          let basePower = 0
-          
-          // Simulate solar generation pattern
-          if (hour >= 6 && hour <= 18) {
-            const solarFactor = Math.sin(((hour - 6) / 12) * Math.PI)
-            basePower = solarFactor * (3 + Math.random() * 2) // 0-5 kW range
-          }
-          
+      // No mock data - only use real API data
+      
+      // Sort and transform data
+      if (data && data.length > 0) {
+        data.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+        
+        const transformedData = data.map(item => {
+          const itemDate = new Date(item.timestamp)
           return {
-            timestamp: timestamp.toISOString(),
-            predicted_power_kw: Math.max(0, basePower + (Math.random() - 0.5) * 0.5),
-            weather_conditions: {
-              temperature: 25 + Math.random() * 10,
-              relative_humidity_2m: 60 + Math.random() * 20,
-              cloud_cover: Math.random() * 50
-            }
+            time: itemDate.toLocaleTimeString('en-US', { 
+              hour: '2-digit', 
+              minute: '2-digit',
+              hour12: false
+            }),
+            hourLabel: `${itemDate.getHours()}:00`,
+            predictedPower: item.predicted_power_kw || 0,
+            temperature: item.weather_conditions?.temperature || 0,
+            humidity: item.weather_conditions?.relative_humidity_2m || 0,
+            timestamp: item.timestamp,
+            weather_conditions: item.weather_conditions
           }
         })
-        console.log('Created mock real-time data with', data.length, 'points')
+        
+        console.log(`Historical predictions updated: ${transformedData.length} records`)
+        console.log('Time range:', transformedData.length > 0 ? 
+          `${transformedData[0].time} to ${transformedData[transformedData.length - 1].time}` : 'No data')
+        
+        setRealtimePredictions(transformedData)
+        
+        if (transformedData.length > 0) {
+          const latestPower = transformedData[transformedData.length - 1].predictedPower
+          setCurrentPrediction(latestPower || 0)
+        }
+      } else {
+        setRealtimePredictions([])
       }
       
-      const transformedData = data.map(item => ({
-        time: new Date(item.timestamp).toLocaleTimeString('en-US', { 
-          hour: '2-digit', 
-          minute: '2-digit' 
-        }),
-        predictedPower: item.predicted_power_kw || 0,
-        temperature: item.weather_conditions?.temperature || 0,
-        humidity: item.weather_conditions?.relative_humidity_2m || 0,
-        timestamp: item.timestamp,
-        weather_conditions: item.weather_conditions
-      }))
-      
-      // Log prediction data for debugging
-      console.log(`Realtime predictions updated: ${transformedData.length} records`)
-      console.log('Latest prediction timestamp:', transformedData.length > 0 ? transformedData[transformedData.length - 1].time : 'No data')
-      console.log('Prediction data sample:', transformedData.slice(0, 3))
-      console.log('Power values:', transformedData.map(d => d.predictedPower).slice(0, 5))
-      
-      setRealtimePredictions(transformedData)
-      
-      // Set current prediction from latest data
-      if (transformedData.length > 0) {
-        const latestPower = transformedData[transformedData.length - 1].predictedPower
-        setCurrentPrediction(latestPower || 0)
-        console.log('Set current prediction to:', latestPower)
-      }
-      
-      // Update API status
       setApiStatus(prev => ({ ...prev, solar: 'connected' }))
       
     } catch (err) {
@@ -215,153 +203,148 @@ function App() {
     }
   }
 
-  // Fetch 24-hour forecast predictions using NEW ENDPOINT
+  // Fetch 24-hour forecast predictions (rolling window - next 24 hours)
   const fetchForecastPredictions = async () => {
     try {
-      console.log('Fetching 24-hour forecast predictions from NEW endpoint...')
+      const { forecastStartTime, forecastEndTime, currentHour, windowLabel } = getRollingTimeWindow()
+      console.log(`Fetching 24-hour forecast predictions for rolling window: ${windowLabel}`)
+      console.log(`Forecast window: ${forecastStartTime.toLocaleString()} to ${forecastEndTime.toLocaleString()}`)
       
       let transformedForecastData = []
       
-      // PRIMARY: Use the NEW forecast endpoint /solar-predictions/forecast
+      // PRIMARY: Use the GET /solar-predictions/forecast endpoint (faster, from database)
       try {
-        console.log('Using NEW forecast endpoint: GET /solar-predictions/forecast?limit=24')
+        console.log('Using GET /solar-predictions/forecast endpoint for existing predictions...')
         const data = await solarApi.getForecastSolarPredictions(24, null)
-        console.log('Fetched forecast predictions from NEW endpoint:', data?.length || 0, 'records')
+        console.log('Fetched forecast predictions from database:', data?.length || 0, 'records')
+        console.log('Sample forecast data from DB:', data?.slice(0, 2))
         
-        if (data && data.length > 0) {
-          transformedForecastData = data.map(item => ({
-            time: new Date(item.timestamp).toLocaleTimeString('en-US', { 
-              hour: '2-digit', 
-              minute: '2-digit' 
-            }),
-            predictedPower: Math.max(0, item.predicted_power_kw || 0), // Ensure non-negative values
-            timestamp: item.timestamp,
-            weather_conditions: item.weather_conditions,
-            id: item.id,
-            weather_data_id: item.weather_data_id,
-            latitude: item.latitude,
-            longitude: item.longitude,
-            prediction_created_at: item.prediction_created_at
-          }))
-          console.log('Successfully transformed forecast data from NEW endpoint')
-          console.log('Sample forecast item:', transformedForecastData[0])
+        if (data && Array.isArray(data) && data.length > 0) {
+          transformedForecastData = data.map(item => {
+            const itemDate = new Date(item.timestamp)
+            const powerValue = item.predicted_power_kw || item.predicted_power || 0
+            console.log(`DB Forecast item: ${item.timestamp} -> ${powerValue} kW`)
+            return {
+              time: itemDate.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: false
+              }),
+              hourLabel: `${itemDate.getHours()}:00`,
+              predictedPower: Math.max(0, powerValue),
+              timestamp: item.timestamp,
+              weather_conditions: item.weather_conditions,
+              id: item.id,
+              weather_data_id: item.weather_data_id
+            }
+          })
+          console.log('Successfully transformed forecast data from database:', transformedForecastData.length, 'points')
+          console.log('Sample transformed data:', transformedForecastData.slice(0, 2))
+        } else {
+          console.log('No forecast data available in database')
         }
       } catch (err) {
-        console.warn('NEW forecast endpoint failed, trying alternatives:', err)
+        console.warn('Database forecast endpoint failed:', err)
       }
       
-      // Fallback 1: Try real-time forecast generation
+      // FALLBACK 1: Try real-time forecast generation via POST /predict/forecast
       if (transformedForecastData.length === 0) {
         try {
-          console.log('Trying real-time forecast generation...')
+          console.log('FALLBACK 1: Trying real-time forecast generation via POST /predict/forecast...')
           const forecastData = await solarApi.predictWithForecast(
             defaultLocation.latitude, 
             defaultLocation.longitude, 
             24
           )
-          console.log('Fetched real-time forecast predictions:', forecastData)
           
           if (forecastData && forecastData.predictions && forecastData.predictions.length > 0) {
-            transformedForecastData = forecastData.predictions.map(item => ({
-              time: new Date(item.timestamp).toLocaleTimeString('en-US', { 
-                hour: '2-digit', 
-                minute: '2-digit' 
-              }),
-              predictedPower: Math.max(0, item.predicted_power || 0),
-              timestamp: item.timestamp,
-              weather_conditions: item.weather_conditions
-            }))
-            console.log('Successfully generated real-time forecast data')
+            console.log('Processing real-time forecast data:', forecastData.predictions.length, 'predictions')
+            transformedForecastData = forecastData.predictions.map(item => {
+              const itemDate = new Date(item.timestamp)
+              const powerValue = item.predicted_power || item.predicted_power_kw || 0
+              console.log(`Real-time forecast item: ${item.timestamp} -> ${powerValue} kW`)
+              return {
+                time: itemDate.toLocaleTimeString('en-US', { 
+                  hour: '2-digit', 
+                  minute: '2-digit',
+                  hour12: false
+                }),
+                hourLabel: `${itemDate.getHours()}:00`,
+                predictedPower: Math.max(0, powerValue),
+                timestamp: item.timestamp,
+                weather_conditions: item.weather_conditions
+              }
+            })
+            console.log('Successfully generated real-time forecast data:', transformedForecastData.length, 'points')
+            console.log('Sample real-time forecast data:', transformedForecastData.slice(0, 2))
           }
         } catch (err) {
           console.warn('Real-time forecast generation failed:', err)
         }
       }
-      
-      // Fallback 2: Try to trigger forecast pipeline and fetch again
+
+      // FALLBACK 2: Try generating predictions from database weather data
       if (transformedForecastData.length === 0) {
         try {
-          console.log('No forecast data found, triggering forecast pipeline...')
-          await solarApi.triggerForecastPipeline(defaultLocation, 24)
+          console.log('FALLBACK 2: Trying to generate forecast predictions from database weather...')
+          const predictionResult = await solarApi.predictFromDatabase(24, 'forecast', defaultLocation)
+          console.log('Generated forecast predictions from database:', predictionResult)
           
-          // Wait for pipeline to process
-          await new Promise(resolve => setTimeout(resolve, 3000))
-          
-          // Try the NEW endpoint again
-          const data = await solarApi.getForecastSolarPredictions(24, null)
-          if (data && data.length > 0) {
-            transformedForecastData = data.map(item => ({
-              time: new Date(item.timestamp).toLocaleTimeString('en-US', { 
-                hour: '2-digit', 
-                minute: '2-digit' 
-              }),
-              predictedPower: Math.max(0, item.predicted_power_kw || 0),
-              timestamp: item.timestamp,
-              weather_conditions: item.weather_conditions,
-              id: item.id
-            }))
-            console.log('Successfully fetched data after pipeline trigger')
+          // Try to fetch the newly generated predictions
+          const newData = await solarApi.getForecastSolarPredictions(24, null)
+          if (newData && Array.isArray(newData) && newData.length > 0) {
+            transformedForecastData = newData.map(item => {
+              const itemDate = new Date(item.timestamp)
+              const powerValue = item.predicted_power_kw || item.predicted_power || 0
+              return {
+                time: itemDate.toLocaleTimeString('en-US', { 
+                  hour: '2-digit', 
+                  minute: '2-digit',
+                  hour12: false
+                }),
+                hourLabel: `${itemDate.getHours()}:00`,
+                predictedPower: Math.max(0, powerValue),
+                timestamp: item.timestamp,
+                weather_conditions: item.weather_conditions
+              }
+            })
+            console.log('Successfully fetched newly generated forecast data:', transformedForecastData.length, 'points')
           }
-        } catch (genErr) {
-          console.warn('Forecast pipeline trigger failed:', genErr)
+        } catch (err) {
+          console.warn('Database forecast generation failed:', err)
         }
       }
       
-      // Fallback 3: Create realistic mock forecast data if all else fails
+      // Final check and processing
       if (transformedForecastData.length === 0) {
-        console.log('Creating mock forecast data for next 24 hours...')
-        const now = new Date()
-        transformedForecastData = Array.from({ length: 24 }, (_, i) => {
-          const timestamp = new Date(now.getTime() + i * 60 * 60 * 1000) // Next 24 hours
-          const hour = timestamp.getHours()
-          let basePower = 0
-          
-          // Simulate realistic solar generation pattern for future hours
-          if (hour >= 6 && hour <= 18) {
-            const solarFactor = Math.sin(((hour - 6) / 12) * Math.PI)
-            basePower = solarFactor * (4 + Math.random() * 2) // 0-6 kW range for forecast
-          }
-          
-          return {
-            time: timestamp.toLocaleTimeString('en-US', { 
-              hour: '2-digit', 
-              minute: '2-digit' 
-            }),
-            predictedPower: Math.max(0, basePower + (Math.random() - 0.5) * 0.8),
-            timestamp: timestamp.toISOString(),
-            weather_conditions: {
-              data_type: "forecast",
-              cloud_cover: Math.random() * 100,
-              temperature: 26 + Math.random() * 8,
-              pressure_msl: 1010 + Math.random() * 10,
-              wind_speed_10m: 2 + Math.random() * 6,
-              relative_humidity_2m: 55 + Math.random() * 25,
-              direct_normal_irradiance: hour >= 6 && hour <= 18 ? Math.random() * 800 : 0
-            }
-          }
-        })
-        console.log('Created mock forecast data with', transformedForecastData.length, 'points')
+        console.error('NO FORECAST DATA AVAILABLE from any source!')
+        console.log('All forecast data sources failed:')
+        console.log('1. GET /solar-predictions/forecast - failed')
+        console.log('2. POST /predict/forecast - failed') 
+        console.log('3. Database generation - failed')
+        setApiStatus(prev => ({ ...prev, solar: 'error' }))
+      } else {
+        console.log('SUCCESS: Forecast data successfully obtained!')
+        
+        // Sort by timestamp to ensure proper order
+        transformedForecastData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+        
+        // Limit to 24 points if we have more
+        if (transformedForecastData.length > 24) {
+          console.log(`Limiting forecast data from ${transformedForecastData.length} to 24 points`)
+          transformedForecastData = transformedForecastData.slice(0, 24)
+        }
+        
+        console.log(`FINAL FORECAST DATA: ${transformedForecastData.length} records`)
+        console.log('Time range:', transformedForecastData.length > 0 ? 
+          `${transformedForecastData[0].time} to ${transformedForecastData[transformedForecastData.length - 1].time}` : 'No data')
+        console.log('Power range:', transformedForecastData.length > 0 ? 
+          `${Math.min(...transformedForecastData.map(d => d.predictedPower)).toFixed(3)} - ${Math.max(...transformedForecastData.map(d => d.predictedPower)).toFixed(3)} kW` : 'No data')
+        
+        setApiStatus(prev => ({ ...prev, solar: 'connected' }))
       }
-      
-      // Ensure we have exactly 24 points and sort by timestamp
-      if (transformedForecastData.length > 24) {
-        transformedForecastData = transformedForecastData.slice(0, 24)
-      }
-      
-      // Sort by timestamp to ensure proper chronological order
-      transformedForecastData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-      
-      // Log forecast data for debugging
-      console.log(`SUCCESS: Forecast predictions updated: ${transformedForecastData.length} records`)
-      console.log('First forecast timestamp:', transformedForecastData.length > 0 ? transformedForecastData[0].time : 'No data')
-      console.log('Last forecast timestamp:', transformedForecastData.length > 0 ? transformedForecastData[transformedForecastData.length - 1].time : 'No data')
-      console.log('Forecast data sample:', transformedForecastData.slice(0, 3))
-      console.log('Forecast power values:', transformedForecastData.map(d => d.predictedPower.toFixed(2)).slice(0, 8))
       
       setForecastPredictions(transformedForecastData)
-      
-      // Update API status
-      setApiStatus(prev => ({ ...prev, solar: 'connected' }))
       
     } catch (err) {
       console.error('Error fetching forecast predictions:', err)
@@ -373,7 +356,6 @@ function App() {
   const fetchSummary = async () => {
     try {
       const data = await solarApi.getPredictionsSummary(null)
-      console.log('Fetched summary:', data)
       setSummary(data)
     } catch (err) {
       console.error('Error fetching summary:', err)
@@ -384,47 +366,30 @@ function App() {
   const fetchDatabaseStatus = async () => {
     try {
       const status = await solarApi.getDatabaseStatus()
-      console.log('Database status:', status)
       setDbStatus(status)
     } catch (err) {
       console.error('Error fetching database status:', err)
     }
   }
 
-  // Collect fresh weather data and trigger predictions
-  const collectFreshWeatherData = async () => {
+  // Fetch real battery data
+  const fetchBatteryData = async () => {
     try {
-      console.log('Collecting fresh weather data...')
-      await weatherApi.collectWeatherDataSync(
-        defaultLocation.latitude, 
-        defaultLocation.longitude
-      )
-      console.log('Fresh weather data collected successfully')
+      const batteryData = await solarApi.getBatteryStatus()
+      console.log('Fetched battery data:', batteryData)
       
-      // Refresh weather data after collection
-      setTimeout(() => {
-        fetchWeatherData()
-      }, 1000)
+      // Update battery level from real data
+      if (batteryData && typeof batteryData.level === 'number') {
+        setBatteryLevel(batteryData.level)
+      } else if (batteryData && typeof batteryData.battery_level === 'number') {
+        setBatteryLevel(batteryData.battery_level)
+      } else if (batteryData && typeof batteryData.charge_percentage === 'number') {
+        setBatteryLevel(batteryData.charge_percentage)
+      }
       
     } catch (err) {
-      console.error('Error collecting fresh weather data:', err)
-    }
-  }
-
-  // Trigger forecast pipeline if needed
-  const triggerForecastPipeline = async () => {
-    try {
-      console.log('Triggering forecast pipeline...')
-      await solarApi.triggerForecastPipeline(defaultLocation, 24)
-      console.log('Forecast pipeline triggered successfully')
-      
-      // Refresh forecast data after pipeline
-      setTimeout(() => {
-        fetchForecastPredictions()
-      }, 2000)
-      
-    } catch (err) {
-      console.error('Error triggering forecast pipeline:', err)
+      console.error('Error fetching battery data:', err)
+      // Keep existing battery level if API fails
     }
   }
 
@@ -434,35 +399,18 @@ function App() {
       setLoading(isInitialLoad)
       setError(null)
       
-      // Fetch weather data (with fallback to mock data)
-      await fetchWeatherData()
+      // Update current time window
+      const timeWindow = getRollingTimeWindow()
+      setCurrentTimeWindow(timeWindow)
       
-      // Fetch solar data (these might fail, so handle individually)
-      try {
-        await fetchRealtimePredictions()
-        setApiStatus(prev => ({ ...prev, solar: 'connected' }))
-      } catch (err) {
-        console.error('Solar predictions failed:', err)
-        setApiStatus(prev => ({ ...prev, solar: 'disconnected' }))
-      }
-      
-      try {
-        await fetchForecastPredictions()
-      } catch (err) {
-        console.error('Forecast predictions failed:', err)
-      }
-      
-      try {
-        await fetchSummary()
-      } catch (err) {
-        console.error('Summary fetch failed:', err)
-      }
-      
-      try {
-        await fetchDatabaseStatus()
-      } catch (err) {
-        console.error('Database status failed:', err)
-      }
+      await Promise.all([
+        fetchWeatherData().catch(err => console.warn('Weather fetch failed:', err)),
+        fetchRealtimePredictions().catch(err => console.warn('Realtime predictions failed:', err)),
+        fetchForecastPredictions().catch(err => console.warn('Forecast predictions failed:', err)),
+        fetchSummary().catch(err => console.warn('Summary failed:', err)),
+        fetchDatabaseStatus().catch(err => console.warn('Database status failed:', err)),
+        fetchBatteryData().catch(err => console.warn('Battery data fetch failed:', err))
+      ])
       
     } catch (err) {
       console.error('Error fetching data:', err)
@@ -472,56 +420,54 @@ function App() {
     }
   }
 
-  // Real-time data updates
+  // Real-time data updates with hourly rolling window
   useEffect(() => {
-    // Test API connections first
     testAPIs()
-    
-    // Initial fetch
     fetchAllData(true)
     
-    // Set up interval for real-time updates
-    const interval = setInterval(() => {
-      console.log('Interval update triggered at:', new Date().toLocaleTimeString())
+    // Quick updates every 30 seconds
+    const quickInterval = setInterval(() => {
+      console.log('Quick update triggered at:', new Date().toLocaleTimeString())
+      
+      if (shouldUpdateRollingWindow()) {
+        console.log('HOURLY ROLLING WINDOW UPDATE - Fetching new 24-hour data window')
+        fetchAllData(false)
+        setLastUpdated(new Date())
+      } else {
+        console.log('Regular data refresh (same hour window)')
+        fetchAllData(false)
+      }
+      
+      // Battery level should be updated from real data source
+      // setBatteryLevel updates removed - use real battery data instead
+    }, 30000)
+    
+    // Guaranteed hourly updates
+    const hourlyInterval = setInterval(() => {
+      const timeWindow = getRollingTimeWindow()
+      console.log(`HOURLY WINDOW UPDATE: ${timeWindow.windowLabel}`)
       fetchAllData(false)
       setLastUpdated(new Date())
-      
-      // Simulate battery level changes
-      setBatteryLevel(prev => {
-        const change = (Math.random() - 0.5) * 2
-        return Math.max(0, Math.min(100, prev + change))
-      })
-    }, 30000) // Update every 30 seconds
+    }, 3600000) // Every hour
 
     return () => {
-      clearInterval(interval)
+      clearInterval(quickInterval)
+      clearInterval(hourlyInterval)
     }
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Manual refresh handler
   const handleRefresh = async () => {
-    console.log('Manual refresh triggered at:', new Date().toISOString())
+    console.log('Manual refresh triggered')
     setRefreshing(true)
     setError(null)
     
     try {
-      // Clear existing data first to show immediate change
       setWeatherData([])
       setRealtimePredictions([])
       setForecastPredictions([])
       
-      console.log('Cleared existing data, fetching fresh data...')
-      
-      // Force fresh data collection
-      await collectFreshWeatherData()
-      
-      // Wait for data processing
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      
-      // Fetch all fresh data
       await fetchAllData(false)
-      
-      console.log('Manual refresh completed successfully at:', new Date().toISOString())
       setLastUpdated(new Date())
     } catch (err) {
       console.error('Manual refresh failed:', err)
@@ -529,38 +475,6 @@ function App() {
     } finally {
       setRefreshing(false)
     }
-  }
-
-  // Manual forecast trigger handler
-  const handleTriggerForecast = async () => {
-    console.log('Manual forecast trigger')
-    setRefreshing(true)
-    
-    try {
-      // First collect fresh weather data
-      await collectFreshWeatherData()
-      
-      // Wait a moment for data processing
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      // Then fetch updated predictions
-      await Promise.all([
-        fetchForecastPredictions().catch(err => console.warn('Forecast predictions failed:', err)),
-        fetchRealtimePredictions().catch(err => console.warn('Realtime predictions failed:', err))
-      ])
-      
-      console.log('Forecast update completed successfully')
-    } catch (err) {
-      console.error('Forecast update failed:', err)
-      setError('Forecast update failed. Please try again.')
-    } finally {
-      setRefreshing(false)
-    }
-  }
-
-  // Error retry function
-  const retryFetch = () => {
-    fetchAllData()
   }
 
   if (loading) {
@@ -586,7 +500,7 @@ function App() {
   return (
     <div className="dashboard">
       <div className="dashboard-header">
-        <h1>Solar Energy Dashboard</h1>
+        <h1>Solar Energy Dashboard - Rolling 24h Window</h1>
         <div style={{ 
           display: 'flex', 
           alignItems: 'center', 
@@ -595,6 +509,16 @@ function App() {
           fontSize: '0.9rem' 
         }}>
           <span>Last updated: {lastUpdated.toLocaleTimeString()}</span>
+          {currentTimeWindow && (
+            <span style={{ 
+              fontSize: '0.8rem', 
+              backgroundColor: 'rgba(251, 191, 36, 0.2)',
+              padding: '2px 8px',
+              borderRadius: '4px'
+            }}>
+              Window: {currentTimeWindow.windowLabel}
+            </span>
+          )}
           <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>
             (Weather: {weatherData.length} | Solar: {realtimePredictions.length} | Forecast: {forecastPredictions.length})
           </span>
@@ -613,39 +537,17 @@ function App() {
           >
             {refreshing ? 'Refreshing...' : 'Refresh'}
           </button>
-          <button 
-            onClick={handleTriggerForecast}
-            disabled={refreshing}
-            style={{
-              padding: '5px 10px',
-              backgroundColor: refreshing ? 'rgba(251, 191, 36, 0.4)' : 'rgba(251, 191, 36, 0.8)',
-              color: refreshing ? 'rgba(0, 0, 0, 0.5)' : 'black',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: refreshing ? 'not-allowed' : 'pointer',
-              fontSize: '0.8rem'
-            }}
-          >
-            {refreshing ? 'Updating...' : 'Update Forecast'}
-          </button>
           <div style={{ display: 'flex', gap: '10px', fontSize: '0.8rem' }}>
             <span style={{ 
-              color: apiStatus.weather === 'connected' ? '#10b981' : 
-                     apiStatus.weather === 'mock' ? '#fbbf24' : '#ef4444'
+              color: apiStatus.weather === 'connected' ? '#10b981' : '#ef4444'
             }}>
-              Weather: {apiStatus.weather === 'connected' ? 'Live' : 
-                        apiStatus.weather === 'mock' ? 'Mock' : 'Off'}
+              Weather: {apiStatus.weather === 'connected' ? 'Live' : 'Off'}
             </span>
             <span style={{ 
               color: apiStatus.solar === 'connected' ? '#10b981' : '#ef4444'
             }}>
               Solar: {apiStatus.solar === 'connected' ? 'Live' : 'Off'}
             </span>
-            {dbStatus && (
-              <span>
-                DB: {dbStatus.weather_records}W, {dbStatus.prediction_records}P
-              </span>
-            )}
           </div>
         </div>
       </div>
@@ -676,13 +578,13 @@ function App() {
       {/* Middle row - Real-time and Forecast Predictions */}
       <div className="dashboard-grid">
         <div className="widget">
-          <h2>Current Solar Generation (Last 24h)
+          <h2>Solar Generation (Last 24h Rolling)
             <span style={{ 
               fontSize: '0.8rem', 
               color: 'rgba(255,255,255,0.6)',
               marginLeft: '10px'
             }}>
-              ({realtimePredictions.length}/24 points)
+              ({realtimePredictions.length}/24 hours)
             </span>
           </h2>
           <div className="chart-container">
@@ -691,13 +593,13 @@ function App() {
         </div>
         
         <div className="widget">
-          <h2>Next 24-Hour Solar Forecast
+          <h2>Solar Forecast (Next 24h Rolling)
             <span style={{ 
               fontSize: '0.8rem', 
               color: 'rgba(255,255,255,0.6)',
               marginLeft: '10px'
             }}>
-              ({forecastPredictions.length}/24 points)
+              ({forecastPredictions.length}/24 hours)
             </span>
           </h2>
           <div className="chart-container">

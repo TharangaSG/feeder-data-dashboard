@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useMemo } from 'react'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -24,26 +24,51 @@ ChartJS.register(
 )
 
 const SolarPredictionChart = ({ data, actualData = [] }) => {
-  const [chartKey, setChartKey] = useState(0)
-  
-  // Force chart re-render when data changes
-  useEffect(() => {
-    setChartKey(prev => prev + 1)
-  }, [data, actualData])
+  // Remove the problematic chartKey state and useEffect that causes infinite re-renders
 
   // Memoize chart data to prevent unnecessary re-calculations
   const chartData = useMemo(() => {
-    if (!data || data.length === 0) {
+    // Handle empty or invalid data gracefully
+    if (!data || !Array.isArray(data) || data.length === 0) {
       return {
-        labels: [],
-        datasets: []
+        labels: ['No Data'],
+        datasets: [{
+          label: 'Predicted Power',
+          data: [0],
+          borderColor: '#fbbf24',
+          backgroundColor: 'rgba(251, 191, 36, 0.1)',
+          borderWidth: 3,
+          fill: true,
+          pointBackgroundColor: '#fbbf24',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 2,
+        }]
+      }
+    }
+
+    // Validate and clean data
+    const validData = data.filter(item => item && typeof item === 'object')
+    if (validData.length === 0) {
+      return {
+        labels: ['No Valid Data'],
+        datasets: [{
+          label: 'Predicted Power',
+          data: [0],
+          borderColor: '#fbbf24',
+          backgroundColor: 'rgba(251, 191, 36, 0.1)',
+          borderWidth: 3,
+          fill: true,
+        }]
       }
     }
 
     const datasets = [
       {
         label: 'Predicted Power',
-        data: data.map(item => item.predictedPower || 0),
+        data: validData.map(item => {
+          const power = item.predictedPower || item.predicted_power_kw || item.predicted_power || 0
+          return typeof power === 'number' && !isNaN(power) ? power : 0
+        }),
         borderColor: '#fbbf24',
         backgroundColor: 'rgba(251, 191, 36, 0.1)',
         borderWidth: 3,
@@ -59,26 +84,32 @@ const SolarPredictionChart = ({ data, actualData = [] }) => {
     ]
 
     // Add actual data if available
-    if (actualData && actualData.length > 0) {
-      datasets.push({
-        label: 'Actual Power',
-        data: actualData.map(item => item.actualPower || 0),
-        borderColor: '#10b981',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-        borderWidth: 2,
-        fill: false,
-        pointBackgroundColor: '#10b981',
-        pointBorderColor: '#ffffff',
-        pointBorderWidth: 2,
-        pointHoverBackgroundColor: '#ffffff',
-        pointHoverBorderColor: '#10b981',
-        pointHoverBorderWidth: 3,
-        tension: 0.4,
-      })
+    if (actualData && Array.isArray(actualData) && actualData.length > 0) {
+      const validActualData = actualData.filter(item => item && typeof item === 'object')
+      if (validActualData.length > 0) {
+        datasets.push({
+          label: 'Actual Power',
+          data: validActualData.map(item => {
+            const power = item.actualPower || item.actual_power_kw || 0
+            return typeof power === 'number' && !isNaN(power) ? power : 0
+          }),
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16, 185, 129, 0.1)',
+          borderWidth: 2,
+          fill: false,
+          pointBackgroundColor: '#10b981',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 2,
+          pointHoverBackgroundColor: '#ffffff',
+          pointHoverBorderColor: '#10b981',
+          pointHoverBorderWidth: 3,
+          tension: 0.4,
+        })
+      }
     }
 
     return {
-      labels: data.map(item => item.time),
+      labels: validData.map(item => item.time || item.timestamp || 'Unknown'),
       datasets: datasets,
     }
   }, [data, actualData])
@@ -181,10 +212,8 @@ const SolarPredictionChart = ({ data, actualData = [] }) => {
   return (
     <div style={{ height: '100%', width: '100%' }}>
       <Line 
-        key={chartKey} 
         options={options} 
-        data={chartData} 
-        redraw={true}
+        data={chartData}
       />
     </div>
   )
