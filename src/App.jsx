@@ -214,14 +214,18 @@ function App() {
       
       let transformedForecastData = []
       
-      // PRIMARY: Try POST /predict/forecast first since it's confirmed working
-      try {
-        console.log('PRIMARY: Using POST /predict/forecast endpoint (confirmed working)...')
-        const forecastData = await solarApi.predictWithForecast(
-          defaultLocation.latitude, 
-          defaultLocation.longitude, 
-          24
-        )
+      // Keep existing data if new fetch fails
+      const currentForecastData = forecastPredictions
+      
+      // PRIMARY: Try POST /predict/forecast first since it's confirmed working (with retry)
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          console.log(`PRIMARY: Using POST /predict/forecast endpoint (attempt ${attempt}/2)...`)
+          const forecastData = await solarApi.predictWithForecast(
+            defaultLocation.latitude, 
+            defaultLocation.longitude, 
+            24
+          )
         
         if (forecastData && forecastData.predictions && forecastData.predictions.length > 0) {
           console.log('SUCCESS: Got forecast data from POST endpoint:', forecastData.predictions.length, 'predictions')
@@ -252,11 +256,25 @@ function App() {
             }
           })
           console.log('Successfully processed POST forecast data:', transformedForecastData.length, 'points')
+          break // Success, exit retry loop
         } else {
-          console.warn('POST /predict/forecast returned no predictions!')
+          console.warn(`POST /predict/forecast returned no predictions (attempt ${attempt}/2)`)
+          if (attempt === 2) {
+            console.warn('POST /predict/forecast failed after 2 attempts - no predictions returned')
+          }
         }
-      } catch (err) {
-        console.warn('POST /predict/forecast failed:', err.message)
+        } catch (err) {
+          console.warn(`POST /predict/forecast failed (attempt ${attempt}/2):`, err.message)
+          if (attempt === 2) {
+            console.warn('POST /predict/forecast failed after 2 attempts')
+          } else {
+            console.log('Retrying POST /predict/forecast in 2 seconds...')
+            await new Promise(resolve => setTimeout(resolve, 2000)) // Wait 2 seconds before retry
+          }
+        }
+        
+        // If we got data, break out of retry loop
+        if (transformedForecastData.length > 0) break
       }
       
       // FALLBACK: Use the GET /solar-predictions/forecast endpoint if POST failed
@@ -367,12 +385,23 @@ function App() {
       
       // Final check and processing
       if (transformedForecastData.length === 0) {
-        console.error('NO FORECAST DATA AVAILABLE from any source!')
+        console.warn('NO NEW FORECAST DATA AVAILABLE from any source!')
         console.log('All forecast data sources failed:')
-        console.log('1. GET /solar-predictions/forecast - failed')
-        console.log('2. POST /predict/forecast - failed') 
-        console.log('3. Database generation - failed')
-        setApiStatus(prev => ({ ...prev, solar: 'error' }))
+        console.log('1. POST /predict/forecast - failed')
+        console.log('2. GET /solar-predictions/forecast - failed') 
+        console.log('3. Database generation - skipped')
+        
+        // Keep existing data if we have it, otherwise show error
+        if (currentForecastData && currentForecastData.length > 0) {
+          console.log(`KEEPING EXISTING FORECAST DATA: ${currentForecastData.length} records`)
+          console.log('Using cached forecast data to prevent empty chart')
+          // Don't update forecastPredictions - keep existing data
+          setApiStatus(prev => ({ ...prev, solar: 'cached' }))
+        } else {
+          console.error('No existing forecast data to fall back to')
+          setApiStatus(prev => ({ ...prev, solar: 'error' }))
+          setForecastPredictions([]) // Only clear if we have no fallback
+        }
       } else {
         console.log('SUCCESS: Forecast data successfully obtained!')
         
@@ -394,9 +423,8 @@ function App() {
         console.log(`Expected time window: ${forecastStartTime.toLocaleTimeString()} - ${forecastEndTime.toLocaleTimeString()}`)
         
         setApiStatus(prev => ({ ...prev, solar: 'connected' }))
+        setForecastPredictions(transformedForecastData) // Only update with new data
       }
-      
-      setForecastPredictions(transformedForecastData)
       
     } catch (err) {
       console.error('Error fetching forecast predictions:', err)
@@ -404,23 +432,31 @@ function App() {
     }
   }
 
-  // Fetch dashboard summary
+  // Fetch dashboard summary (optional - skip if timeout)
   const fetchSummary = async () => {
     try {
       const data = await solarApi.getPredictionsSummary(null)
       setSummary(data)
     } catch (err) {
-      console.error('Error fetching summary:', err)
+      if (err.code === 'ECONNABORTED') {
+        console.warn('Summary API timeout - skipping (non-essential)')
+      } else {
+        console.warn('Error fetching summary:', err.message)
+      }
     }
   }
 
-  // Fetch database status
+  // Fetch database status (optional - skip if timeout)
   const fetchDatabaseStatus = async () => {
     try {
       const status = await solarApi.getDatabaseStatus()
       setDbStatus(status)
     } catch (err) {
-      console.error('Error fetching database status:', err)
+      if (err.code === 'ECONNABORTED') {
+        console.warn('Database status API timeout - skipping (non-essential)')
+      } else {
+        console.warn('Error fetching database status:', err.message)
+      }
     }
   }
 
@@ -455,14 +491,21 @@ function App() {
       const timeWindow = getRollingTimeWindow()
       setCurrentTimeWindow(timeWindow)
       
+      // Fetch essential data first
       await Promise.all([
         fetchWeatherData().catch(err => console.warn('Weather fetch failed:', err)),
         fetchRealtimePredictions().catch(err => console.warn('Realtime predictions failed:', err)),
-        fetchForecastPredictions().catch(err => console.warn('Forecast predictions failed:', err)),
-        fetchSummary().catch(err => console.warn('Summary failed:', err)),
-        fetchDatabaseStatus().catch(err => console.warn('Database status failed:', err))
-        // Battery data fetch removed - endpoint not available (404)
+        fetchForecastPredictions().catch(err => console.warn('Forecast predictions failed:', err))
       ])
+      
+      // Fetch non-essential data separately (don't block main dashboard)
+      Promise.all([
+        fetchSummary().catch(err => console.warn('Summary failed (non-essential):', err.message)),
+        fetchDatabaseStatus().catch(err => console.warn('Database status failed (non-essential):', err.message))
+      ]).catch(() => {
+        // Ignore failures for non-essential data
+        console.log('Non-essential data fetch completed with some failures')
+      })
       
     } catch (err) {
       console.error('Error fetching data:', err)
@@ -472,29 +515,38 @@ function App() {
     }
   }
 
-  // Real-time data updates with hourly rolling window
+  // Real-time data updates with different intervals for different data types
   useEffect(() => {
     testAPIs()
     fetchAllData(true)
     
-    // Quick updates every 30 seconds
+    // Quick updates for weather and real-time solar data every 30 seconds
     const quickInterval = setInterval(() => {
-      console.log('Quick update triggered at:', new Date().toLocaleTimeString())
+      console.log('Quick update (weather + realtime solar) triggered at:', new Date().toLocaleTimeString())
       
       if (shouldUpdateRollingWindow()) {
         console.log('HOURLY ROLLING WINDOW UPDATE - Fetching new 24-hour data window')
-        fetchAllData(false)
+        Promise.all([
+          fetchWeatherData().catch(err => console.warn('Weather fetch failed:', err)),
+          fetchRealtimePredictions().catch(err => console.warn('Realtime predictions failed:', err))
+        ])
         setLastUpdated(new Date())
       } else {
-        console.log('Regular data refresh (same hour window)')
-        fetchAllData(false)
+        console.log('Regular data refresh (weather + realtime solar)')
+        Promise.all([
+          fetchWeatherData().catch(err => console.warn('Weather fetch failed:', err)),
+          fetchRealtimePredictions().catch(err => console.warn('Realtime predictions failed:', err))
+        ])
       }
-      
-      // Battery level should be updated from real data source
-      // setBatteryLevel updates removed - use real battery data instead
     }, 30000)
     
-    // Guaranteed hourly updates
+    // Solar forecast updates every 10 minutes
+    const forecastInterval = setInterval(() => {
+      console.log('Solar forecast update triggered at:', new Date().toLocaleTimeString())
+      fetchForecastPredictions().catch(err => console.warn('Forecast predictions failed:', err))
+    }, 600000) // Every 10 minutes (600,000 ms)
+    
+    // Guaranteed hourly updates for all data
     const hourlyInterval = setInterval(() => {
       const timeWindow = getRollingTimeWindow()
       console.log(`HOURLY WINDOW UPDATE: ${timeWindow.windowLabel}`)
@@ -504,6 +556,7 @@ function App() {
 
     return () => {
       clearInterval(quickInterval)
+      clearInterval(forecastInterval)
       clearInterval(hourlyInterval)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps

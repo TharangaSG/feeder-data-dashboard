@@ -204,9 +204,6 @@ const SolarPredictionChart = ({ data, actualData = [] }) => {
       duration: 300,
       easing: 'easeInOutQuart',
     },
-    // Enable real-time updates
-    responsive: true,
-    maintainAspectRatio: false,
   }
 
   return (
