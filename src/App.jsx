@@ -127,7 +127,7 @@ function App() {
       
       let data = []
       
-      // Try to get predictions from database
+      // Try to get predictions from database (skip database generation if it fails)
       try {
         data = await solarApi.getSolarPredictions(48) // Get more data to filter
         console.log('Fetched realtime predictions from database:', data?.length || 0, 'records')
@@ -144,19 +144,8 @@ function App() {
         console.warn('Database predictions failed:', err)
       }
       
-      // Generate predictions if no data
-      if (!data || data.length === 0) {
-        try {
-          console.log('No existing predictions, generating from database weather...')
-          const predictionResult = await solarApi.predictFromDatabase(24, 'current', defaultLocation)
-          console.log('Generated predictions from database:', predictionResult)
-          
-          data = await solarApi.getSolarPredictions(24)
-          console.log('Fetched newly generated predictions:', data?.length || 0, 'records')
-        } catch (err) {
-          console.warn('Database prediction generation failed:', err)
-        }
-      }
+      // Skip database generation since it's causing 503 errors
+      console.log('Skipping database prediction generation due to service unavailability')
       
       // No mock data - only use real API data
       
@@ -203,27 +192,53 @@ function App() {
     }
   }
 
-  // Fetch 24-hour forecast predictions (rolling window - next 24 hours)
+  // Fetch 24-hour forecast predictions (rolling window - next 24 hours from current hour)
   const fetchForecastPredictions = async () => {
     try {
-      const { forecastStartTime, forecastEndTime, currentHour, windowLabel } = getRollingTimeWindow()
-      console.log(`Fetching 24-hour forecast predictions for rolling window: ${windowLabel}`)
-      console.log(`Forecast window: ${forecastStartTime.toLocaleString()} to ${forecastEndTime.toLocaleString()}`)
+      // Calculate real-time forecast window starting from current hour
+      const now = new Date()
+      const currentHour = now.getHours()
+      
+      // Start time: current hour (e.g., if it's 3:15, start at 3:00)
+      const forecastStartTime = new Date(now)
+      forecastStartTime.setHours(currentHour, 0, 0, 0)
+      
+      // End time: 24 hours from current hour (e.g., 3:00 tomorrow)
+      const forecastEndTime = new Date(forecastStartTime)
+      forecastEndTime.setHours(forecastEndTime.getHours() + 24)
+      
+      const windowLabel = `${currentHour}:00 - ${(currentHour + 24) % 24}:00 (+24h)`
+      
+      console.log(`Fetching 24-hour forecast predictions starting from current hour: ${windowLabel}`)
+      console.log(`Real-time forecast window: ${forecastStartTime.toLocaleString()} to ${forecastEndTime.toLocaleString()}`)
       
       let transformedForecastData = []
       
-      // PRIMARY: Use the GET /solar-predictions/forecast endpoint (faster, from database)
+      // PRIMARY: Try POST /predict/forecast first since it's confirmed working
       try {
-        console.log('Using GET /solar-predictions/forecast endpoint for existing predictions...')
-        const data = await solarApi.getForecastSolarPredictions(24, null)
-        console.log('Fetched forecast predictions from database:', data?.length || 0, 'records')
-        console.log('Sample forecast data from DB:', data?.slice(0, 2))
+        console.log('PRIMARY: Using POST /predict/forecast endpoint (confirmed working)...')
+        const forecastData = await solarApi.predictWithForecast(
+          defaultLocation.latitude, 
+          defaultLocation.longitude, 
+          24
+        )
         
-        if (data && Array.isArray(data) && data.length > 0) {
-          transformedForecastData = data.map(item => {
+        if (forecastData && forecastData.predictions && forecastData.predictions.length > 0) {
+          console.log('SUCCESS: Got forecast data from POST endpoint:', forecastData.predictions.length, 'predictions')
+          console.log('Sample POST forecast data:', forecastData.predictions.slice(0, 2))
+          
+          // Filter real-time forecast data to match our time window
+          const filteredPredictions = forecastData.predictions.filter(item => {
+            const itemTime = new Date(item.timestamp)
+            return itemTime >= forecastStartTime && itemTime < forecastEndTime
+          })
+          
+          console.log(`Filtered POST forecast to time window: ${filteredPredictions.length} records`)
+          
+          transformedForecastData = filteredPredictions.map(item => {
             const itemDate = new Date(item.timestamp)
-            const powerValue = item.predicted_power_kw || item.predicted_power || 0
-            console.log(`DB Forecast item: ${item.timestamp} -> ${powerValue} kW`)
+            const powerValue = item.predicted_power || item.predicted_power_kw || 0
+            console.log(`POST forecast item: ${item.timestamp} -> ${powerValue} kW`)
             return {
               time: itemDate.toLocaleTimeString('en-US', { 
                 hour: '2-digit', 
@@ -233,86 +248,121 @@ function App() {
               hourLabel: `${itemDate.getHours()}:00`,
               predictedPower: Math.max(0, powerValue),
               timestamp: item.timestamp,
-              weather_conditions: item.weather_conditions,
-              id: item.id,
-              weather_data_id: item.weather_data_id
+              weather_conditions: item.weather_conditions
             }
           })
+          console.log('Successfully processed POST forecast data:', transformedForecastData.length, 'points')
+        } else {
+          console.warn('POST /predict/forecast returned no predictions!')
+        }
+      } catch (err) {
+        console.warn('POST /predict/forecast failed:', err.message)
+      }
+      
+      // FALLBACK: Use the GET /solar-predictions/forecast endpoint if POST failed
+      if (transformedForecastData.length === 0) {
+        try {
+          console.log('FALLBACK: Using GET /solar-predictions/forecast endpoint...')
+          console.log('Requesting forecast data with limit=48...')
+          const data = await solarApi.getForecastSolarPredictions(48, null) // Get more data to filter by time
+          console.log('Fetched forecast predictions from database:', data?.length || 0, 'records')
+          console.log('Sample forecast data from DB:', data?.slice(0, 2))
+          
+          if (!data || data.length === 0) {
+            console.warn('GET /solar-predictions/forecast returned no data!')
+          }
+        
+        if (data && Array.isArray(data) && data.length > 0) {
+          console.log('Raw forecast data sample:', data.slice(0, 3))
+          console.log('Raw forecast data timestamps:', data.slice(0, 5).map(item => item.timestamp))
+          console.log('Raw forecast data power values:', data.slice(0, 5).map(item => ({
+            timestamp: item.timestamp,
+            predicted_power_kw: item.predicted_power_kw,
+            predicted_power: item.predicted_power,
+            power_value: item.predicted_power_kw || item.predicted_power || 'ZERO/UNDEFINED'
+          })))
+          
+          // Filter data to real-time forecast window (next 24 hours from current hour)
+          const filteredData = data.filter(item => {
+            const itemTime = new Date(item.timestamp)
+            const isInRange = itemTime >= forecastStartTime && itemTime < forecastEndTime
+            if (!isInRange && data.indexOf(item) < 3) {
+              console.log(`Item ${item.timestamp} outside range: ${itemTime.toLocaleString()} not in ${forecastStartTime.toLocaleString()} - ${forecastEndTime.toLocaleString()}`)
+            }
+            return isInRange
+          })
+          
+          console.log(`Filtered forecast data to real-time window: ${filteredData.length} records from ${data.length} total`)
+          console.log(`Time filter: ${forecastStartTime.toLocaleString()} to ${forecastEndTime.toLocaleString()}`)
+          
+          if (filteredData.length === 0 && data.length > 0) {
+            console.warn('WARNING: No data matches the time filter! Using all available data instead.')
+            // Fallback: use all data if time filtering removes everything
+            const allData = data.slice(0, 24) // Limit to 24 points
+            console.log('Fallback data power values:', allData.slice(0, 5).map(item => ({
+              timestamp: item.timestamp,
+              predicted_power_kw: item.predicted_power_kw,
+              predicted_power: item.predicted_power,
+              final_power: item.predicted_power_kw || item.predicted_power || 0
+            })))
+            
+            transformedForecastData = allData.map(item => {
+              const itemDate = new Date(item.timestamp)
+              const powerValue = item.predicted_power_kw || item.predicted_power || 0
+              console.log(`Fallback transform: ${item.timestamp} -> ${powerValue} kW (from predicted_power_kw: ${item.predicted_power_kw}, predicted_power: ${item.predicted_power})`)
+              return {
+                time: itemDate.toLocaleTimeString('en-US', { 
+                  hour: '2-digit', 
+                  minute: '2-digit',
+                  hour12: false
+                }),
+                hourLabel: `${itemDate.getHours()}:00`,
+                predictedPower: Math.max(0, powerValue),
+                timestamp: item.timestamp,
+                weather_conditions: item.weather_conditions,
+                id: item.id,
+                weather_data_id: item.weather_data_id
+              }
+            })
+            console.log('Using fallback: all available data:', transformedForecastData.length, 'points')
+            console.log('Fallback transformed power values:', transformedForecastData.slice(0, 5).map(item => ({
+              time: item.time,
+              predictedPower: item.predictedPower
+            })))
+          } else if (filteredData.length > 0) {
+            // Use filtered data if we have matches
+            transformedForecastData = filteredData.map(item => {
+              const itemDate = new Date(item.timestamp)
+              const powerValue = item.predicted_power_kw || item.predicted_power || 0
+              console.log(`DB Forecast item: ${item.timestamp} -> ${powerValue} kW`)
+              return {
+                time: itemDate.toLocaleTimeString('en-US', { 
+                  hour: '2-digit', 
+                  minute: '2-digit',
+                  hour12: false
+                }),
+                hourLabel: `${itemDate.getHours()}:00`,
+                predictedPower: Math.max(0, powerValue),
+                timestamp: item.timestamp,
+                weather_conditions: item.weather_conditions,
+                id: item.id,
+                weather_data_id: item.weather_data_id
+              }
+            })
+          }
           console.log('Successfully transformed forecast data from database:', transformedForecastData.length, 'points')
           console.log('Sample transformed data:', transformedForecastData.slice(0, 2))
         } else {
           console.log('No forecast data available in database')
         }
-      } catch (err) {
-        console.warn('Database forecast endpoint failed:', err)
-      }
-      
-      // FALLBACK 1: Try real-time forecast generation via POST /predict/forecast
-      if (transformedForecastData.length === 0) {
-        try {
-          console.log('FALLBACK 1: Trying real-time forecast generation via POST /predict/forecast...')
-          const forecastData = await solarApi.predictWithForecast(
-            defaultLocation.latitude, 
-            defaultLocation.longitude, 
-            24
-          )
-          
-          if (forecastData && forecastData.predictions && forecastData.predictions.length > 0) {
-            console.log('Processing real-time forecast data:', forecastData.predictions.length, 'predictions')
-            transformedForecastData = forecastData.predictions.map(item => {
-              const itemDate = new Date(item.timestamp)
-              const powerValue = item.predicted_power || item.predicted_power_kw || 0
-              console.log(`Real-time forecast item: ${item.timestamp} -> ${powerValue} kW`)
-              return {
-                time: itemDate.toLocaleTimeString('en-US', { 
-                  hour: '2-digit', 
-                  minute: '2-digit',
-                  hour12: false
-                }),
-                hourLabel: `${itemDate.getHours()}:00`,
-                predictedPower: Math.max(0, powerValue),
-                timestamp: item.timestamp,
-                weather_conditions: item.weather_conditions
-              }
-            })
-            console.log('Successfully generated real-time forecast data:', transformedForecastData.length, 'points')
-            console.log('Sample real-time forecast data:', transformedForecastData.slice(0, 2))
-          }
         } catch (err) {
-          console.warn('Real-time forecast generation failed:', err)
+          console.warn('Database forecast endpoint failed:', err)
         }
       }
 
-      // FALLBACK 2: Try generating predictions from database weather data
+      // Skip database generation fallback since it's causing 503 errors
       if (transformedForecastData.length === 0) {
-        try {
-          console.log('FALLBACK 2: Trying to generate forecast predictions from database weather...')
-          const predictionResult = await solarApi.predictFromDatabase(24, 'forecast', defaultLocation)
-          console.log('Generated forecast predictions from database:', predictionResult)
-          
-          // Try to fetch the newly generated predictions
-          const newData = await solarApi.getForecastSolarPredictions(24, null)
-          if (newData && Array.isArray(newData) && newData.length > 0) {
-            transformedForecastData = newData.map(item => {
-              const itemDate = new Date(item.timestamp)
-              const powerValue = item.predicted_power_kw || item.predicted_power || 0
-              return {
-                time: itemDate.toLocaleTimeString('en-US', { 
-                  hour: '2-digit', 
-                  minute: '2-digit',
-                  hour12: false
-                }),
-                hourLabel: `${itemDate.getHours()}:00`,
-                predictedPower: Math.max(0, powerValue),
-                timestamp: item.timestamp,
-                weather_conditions: item.weather_conditions
-              }
-            })
-            console.log('Successfully fetched newly generated forecast data:', transformedForecastData.length, 'points')
-          }
-        } catch (err) {
-          console.warn('Database forecast generation failed:', err)
-        }
+        console.log('FALLBACK 2: Skipping database generation due to service unavailability (503 errors)')
       }
       
       // Final check and processing
@@ -336,10 +386,12 @@ function App() {
         }
         
         console.log(`FINAL FORECAST DATA: ${transformedForecastData.length} records`)
+        console.log(`Real-time forecast window: ${windowLabel}`)
         console.log('Time range:', transformedForecastData.length > 0 ? 
           `${transformedForecastData[0].time} to ${transformedForecastData[transformedForecastData.length - 1].time}` : 'No data')
         console.log('Power range:', transformedForecastData.length > 0 ? 
           `${Math.min(...transformedForecastData.map(d => d.predictedPower)).toFixed(3)} - ${Math.max(...transformedForecastData.map(d => d.predictedPower)).toFixed(3)} kW` : 'No data')
+        console.log(`Expected time window: ${forecastStartTime.toLocaleTimeString()} - ${forecastEndTime.toLocaleTimeString()}`)
         
         setApiStatus(prev => ({ ...prev, solar: 'connected' }))
       }
@@ -388,8 +440,8 @@ function App() {
       }
       
     } catch (err) {
-      console.error('Error fetching battery data:', err)
-      // Keep existing battery level if API fails
+      console.warn('Battery API not available (404), keeping current level:', err.response?.status)
+      // Keep existing battery level if API fails - this is expected if endpoint doesn't exist
     }
   }
 
@@ -408,8 +460,8 @@ function App() {
         fetchRealtimePredictions().catch(err => console.warn('Realtime predictions failed:', err)),
         fetchForecastPredictions().catch(err => console.warn('Forecast predictions failed:', err)),
         fetchSummary().catch(err => console.warn('Summary failed:', err)),
-        fetchDatabaseStatus().catch(err => console.warn('Database status failed:', err)),
-        fetchBatteryData().catch(err => console.warn('Battery data fetch failed:', err))
+        fetchDatabaseStatus().catch(err => console.warn('Database status failed:', err))
+        // Battery data fetch removed - endpoint not available (404)
       ])
       
     } catch (err) {

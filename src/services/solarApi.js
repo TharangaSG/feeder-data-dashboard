@@ -163,13 +163,13 @@ export const solarApi = {
     return response.data
   },
 
-  // Get battery status/level
-  getBatteryStatus: async () => {
-    console.log('Fetching real battery status from /battery/status...')
-    const response = await solarApiInstance.get('/battery/status')
-    console.log('Battery status received successfully')
-    return response.data
-  },
+  // Battery status endpoint not available - removed to prevent 404 errors
+  // getBatteryStatus: async () => {
+  //   console.log('Fetching real battery status from /battery/status...')
+  //   const response = await solarApiInstance.get('/battery/status')
+  //   console.log('Battery status received successfully')
+  //   return response.data
+  // },
 
   // Test solar API connection
   testConnection: async () => {
